@@ -1,0 +1,126 @@
+using BossMod.AI;  
+using BossMod.Autorotation;  
+using BossMod.Pathfinding;  
+  
+namespace BossMod.Stormblood.Ultimate.UWU;  
+  
+// Encounter-specific AI for UWU (The Weapon's Refrain Ultimate).  
+// Provides automatic movement per phase; mechanic-specific safespots are TODO.  
+sealed class UWUAI(RotationModuleManager manager, Actor player) : AIRotationModule(manager, player)  
+{  
+    public enum Track { Movement }  
+    public enum MovementStrategy { None, Pathfind, PathfindMeleeGreed, Explicit, ExplicitMelee, Automatic }  
+  
+    public static RotationModuleDefinition Definition()  
+    {  
+        var res = new RotationModuleDefinition("AI Experiment", "Experimental encounter-specific rotation", "Encounter AI", "veyn", RotationModuleQuality.WIP, new(~1ul), 100, 1, RotationModuleOrder.Movement, typeof(UWU));  
+        res.Define(Track.Movement).As<MovementStrategy>("Movement", "Movement")  
+            .AddOption(MovementStrategy.None, "None", "No automatic movement")  
+            .AddOption(MovementStrategy.Pathfind, "Pathfind", "Use standard pathfinding to move")  
+            .AddOption(MovementStrategy.PathfindMeleeGreed, "PathfindMeleeGreed", "Melee greed: find closest safespot, then move to maxmelee closest to it")  
+            .AddOption(MovementStrategy.Explicit, "Explicit", "Move to specific point", supportedTargets: ActionTargets.Area)  
+            .AddOption(MovementStrategy.ExplicitMelee, "ExplicitMelee", "Move to the point in maxmelee that is closest to specific point", supportedTargets: ActionTargets.Area)  
+            .AddOption(MovementStrategy.Automatic, "Automatic", "Fully scripted per-phase positioning");  
+        return res;  
+    }  
+  
+    public override void Execute(StrategyValues strategy, ref Actor? primaryTarget, float estimatedAnimLockDelay, bool isMoving)  
+    {  
+        if (Bossmods.ActiveModule is not UWU module)  
+            return;  
+  
+        var playerSlot = module.Raid.FindSlot(Player.InstanceID);  
+        if (playerSlot < 0)  
+            return;  
+  
+        var assignment = Service.Config.Get<PartyRolesConfig>()[module.Raid.Members[playerSlot].ContentId];  
+        var opt = strategy.Option(Track.Movement);  
+  
+        SetForcedMovement(CalculateDestination(module, primaryTarget, opt, assignment));  
+    }  
+  
+    private WPos? CalculateDestination(UWU module, Actor? primaryTarget, StrategyValues.OptionRef strategy, PartyRolesConfig.Assignment assignment) => strategy.As<MovementStrategy>() switch  
+    {  
+        MovementStrategy.Pathfind => PathfindPosition(null),  
+        MovementStrategy.PathfindMeleeGreed => PathfindPosition(ResolveTargetOverride(strategy.Value) ?? primaryTarget),  
+        MovementStrategy.Explicit => ResolveTargetLocation(strategy.Value),  
+        MovementStrategy.ExplicitMelee => ExplicitMeleePosition(ResolveTargetLocation(strategy.Value), ResolveTargetOverride(strategy.Value) ?? primaryTarget),  
+        MovementStrategy.Automatic => AutomaticPosition(module, primaryTarget, assignment),  
+        _ => null  
+    };  
+  
+    // --- generic helpers (same as FRUAI) ---  
+  
+    private WPos PathfindPosition(Actor? meleeGreedTarget)  
+    {  
+        var res = NavigationDecision.Build(NavigationContext, World, Hints, Player, Speed());  
+        return meleeGreedTarget != null && res.Destination != null ? ClosestInMelee(res.Destination.Value, meleeGreedTarget) : (res.Destination ?? Player.Position);  
+    }  
+  
+    private WPos ExplicitMeleePosition(WPos ideal, Actor? target) => target != null ? ClosestInMelee(ideal, target) : ideal;  
+  
+    // --- scripted positioning ---  
+  
+    private WPos? AutomaticPosition(UWU module, Actor? primaryTarget, PartyRolesConfig.Assignment assignment)  
+    {  
+        // default: pathfind to safety, then greed back into melee of the active primal  
+        var boss = CurrentBoss(module) ?? primaryTarget;  
+        var basePos = PathfindPosition(boss);  
+  
+        return module.StateMachine.ActivePhaseIndex switch  
+        {  
+            0 => GarudaPosition(module, boss, basePos),  
+            1 => IfritPosition(module, boss, basePos),  
+            2 => TitanPosition(module, boss, basePos),  
+            3 => LahabreaPosition(module, boss, basePos),  
+            4 => UltimaPosition(module, boss, basePos),  
+            _ => basePos  
+        };  
+    }  
+  
+    private Actor? CurrentBoss(UWU module) => module.StateMachine.ActivePhaseIndex switch  
+    {  
+        0 => module.Garuda(),  
+        1 => module.Ifrit(),  
+        2 => module.Titan(),  
+        3 => module.Lahabrea() ?? module.Ultima(),  
+        _ => module.Ultima()  
+    };  
+  
+    // P1: Garuda - slipstream/donut AOEs are handled by forbidden zones; stay in melee otherwise  
+    private WPos GarudaPosition(UWU module, Actor? boss, WPos basePos)  
+    {  
+        // TODO: Feather Rain bait positions, Mistral Song intercardinal safespots,  
+        // Spiny Plume / Satin Plume add positioning, Wicked Wheel out  
+        return basePos;  
+    }  
+  
+    // P2: Ifrit - nails, eruptions, searing wind, infernal fetters, dashes  
+    private WPos IfritPosition(UWU module, Actor? boss, WPos basePos)  
+    {  
+        // TODO: eruption bait movement (like Ex4IfritAICommon.AddDefaultEruptionBaiterHints),  
+        // searing wind spread spot, dash safespot behind Ifrit  
+        return basePos;  
+    }  
+  
+    // P3: Titan - landslides, gaols, weight of the land, upheaval knockback  
+    private WPos TitanPosition(UWU module, Actor? boss, WPos basePos)  
+    {  
+        // TODO: landslide safespot (opposite titan), gaol soaks, bomb positions  
+        return basePos;  
+    }  
+  
+    // P4: Lahabrea + Ultima transition - blight, homing lasers spread  
+    private WPos LahabreaPosition(UWU module, Actor? boss, WPos basePos)  
+    {  
+        // TODO: homing laser spread clock spot based on assignment  
+        return basePos;  
+    }  
+  
+    // P5: Ultima - suppression, aetherochemical lasers, light pillar baits, aetheric boom  
+    private WPos UltimaPosition(UWU module, Actor? boss, WPos basePos)  
+    {  
+        // TODO: suppression stack/spread, laser dodge, light pillar bait spot  
+        return basePos;  
+    }  
+}
