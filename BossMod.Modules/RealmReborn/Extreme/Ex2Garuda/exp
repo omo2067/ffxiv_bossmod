@@ -1,0 +1,49 @@
+using BossMod.AI;  
+using BossMod.Autorotation;  
+using BossMod.Pathfinding;  
+  
+namespace BossMod.RealmReborn.Extreme.Ex2Garuda;  
+  
+// Encounter-specific AI for The Howling Eye (Extreme).  
+sealed class Ex2GarudaAIRotation(RotationModuleManager manager, Actor player) : AIRotationModule(manager, player)  
+{  
+    public enum Track { Movement }  
+    public enum MovementStrategy { None, Pathfind, PathfindMeleeGreed, Explicit, ExplicitMelee }  
+  
+    public static RotationModuleDefinition Definition()  
+    {  
+        var res = new RotationModuleDefinition("AI Experiment", "Experimental encounter-specific rotation", "Encounter AI", "veyn", RotationModuleQuality.WIP, new(~1ul), 1000, 1, RotationModuleOrder.Movement, typeof(Ex2Garuda));  
+        res.Define(Track.Movement).As<MovementStrategy>("Movement", "Movement")  
+            .AddOption(MovementStrategy.None, "None", "No automatic movement")  
+            .AddOption(MovementStrategy.Pathfind, "Pathfind", "Use standard pathfinding to move")  
+            .AddOption(MovementStrategy.PathfindMeleeGreed, "PathfindMeleeGreed", "Melee greed: closest safespot, then maxmelee")  
+            .AddOption(MovementStrategy.Explicit, "Explicit", "Move to specific point", supportedTargets: ActionTargets.Area)  
+            .AddOption(MovementStrategy.ExplicitMelee, "ExplicitMelee", "Maxmelee closest to specific point", supportedTargets: ActionTargets.Area);  
+        return res;  
+    }  
+  
+    public override void Execute(StrategyValues strategy, ref Actor? primaryTarget, float estimatedAnimLockDelay, bool isMoving)  
+    {  
+        if (Bossmods.ActiveModule is not Ex2Garuda)  
+            return;  
+  
+        SetForcedMovement(CalculateDestination(primaryTarget, strategy.Option(Track.Movement)));  
+    }  
+  
+    private WPos? CalculateDestination(Actor? primaryTarget, StrategyValues.OptionRef strategy) => strategy.As<MovementStrategy>() switch  
+    {  
+        MovementStrategy.Pathfind => PathfindPosition(null),  
+        MovementStrategy.PathfindMeleeGreed => PathfindPosition(ResolveTargetOverride(strategy.Value) ?? primaryTarget),  
+        MovementStrategy.Explicit => ResolveTargetLocation(strategy.Value),  
+        MovementStrategy.ExplicitMelee => ExplicitMeleePosition(ResolveTargetLocation(strategy.Value), ResolveTargetOverride(strategy.Value) ?? primaryTarget),  
+        _ => null  
+    };  
+  
+    private WPos PathfindPosition(Actor? meleeGreedTarget)  
+    {  
+        var res = NavigationDecision.Build(NavigationContext, World, Hints, Player, Speed());  
+        return meleeGreedTarget != null && res.Destination != null ? ClosestInMelee(res.Destination.Value, meleeGreedTarget) : (res.Destination ?? Player.Position);  
+    }  
+  
+    private WPos ExplicitMeleePosition(WPos ideal, Actor? target) => target != null ? ClosestInMelee(ideal, target) : ideal;  
+}
